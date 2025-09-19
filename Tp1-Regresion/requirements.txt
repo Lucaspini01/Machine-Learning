@@ -1,0 +1,6 @@
+# Se requieren las siguientes librerias:
+numpy
+pandas
+matplotlib
+pyplot
+seaborn
