@@ -58,61 +58,128 @@ def f1_score(y_true, y_pred, labels):
         f1_scores[label] = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
     return f1_scores
 
-def PR_curve(y_true, y_pred, labels):
-    """
-    Compute precision-recall curve data for each class.
-    """
-    from sklearn.metrics import precision_recall_curve
 
-    pr_curves = {}
-    for i, label in enumerate(labels):
-        y_true_binary = (y_true == label).astype(int)
-        y_pred_scores = (y_pred == label).astype(int)  # Assuming y_pred are binary scores
-        precision, recall, _ = precision_recall_curve(y_true_binary, y_pred_scores)
-        pr_curves[label] = (precision, recall)
-    
-    return pr_curves
 
-def ROC_curve(y_true, y_pred, labels):
+def auc_trapezoid(x, y):
     """
-    Compute ROC curve data for each class.
+    Área bajo curva por regla trapezoidal.
+    Requiere x ordenado de forma ascendente.
     """
-    from sklearn.metrics import roc_curve
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    # ordenar por x por si acaso
+    order = np.argsort(x)
+    x, y = x[order], y[order]
+    dx = np.diff(x)
+    y_mid = (y[1:] + y[:-1]) / 2.0
 
-    roc_curves = {}
-    for i, label in enumerate(labels):
-        y_true_binary = (y_true == label).astype(int)
-        y_pred_scores = (y_pred == label).astype(int)  # Assuming y_pred are binary scores
-        fpr, tpr, _ = roc_curve(y_true_binary, y_pred_scores)
-        roc_curves[label] = (fpr, tpr)
-    
-    return roc_curves
+    return float(np.sum(dx * y_mid))
 
-def AUC_ROC_curve(y_true, y_pred, labels):
-    """
-    Compute AUC-ROC for each class.
-    """
-    from sklearn.metrics import roc_auc_score
+def _binarize(y_true, positive_label):
+    """Devuelve vector binario 0/1 para la clase positiva."""
+    y_true = np.asarray(y_true)
+    return (y_true == positive_label).astype(int)
 
-    auc_scores = {}
-    for i, label in enumerate(labels):
-        y_true_binary = (y_true == label).astype(int)
-        y_pred_scores = (y_pred == label).astype(int)  # Assuming y_pred are binary scores
-        auc_scores[label] = roc_auc_score(y_true_binary, y_pred_scores)
-    
-    return auc_scores
-
-def AUC_PR_curve(y_true, y_pred, labels):
+def pr_curve_ovr(y_true, y_scores, positive_label):
     """
-    Compute AUC-PR for each class.
+    Curva Precision-Recall para una clase (OvR) sin sklearn.
+    y_scores: probas o puntajes (más alto = más positivo).
+    Devuelve (precisions, recalls).
     """
-    from sklearn.metrics import average_precision_score
+    y_true_bin = _binarize(y_true, positive_label)
+    scores = np.asarray(y_scores, dtype=float)
 
-    auc_pr_scores = {}
-    for i, label in enumerate(labels):
-        y_true_binary = (y_true == label).astype(int)
-        y_pred_scores = (y_pred == label).astype(int)  # Assuming y_pred are binary scores
-        auc_pr_scores[label] = average_precision_score(y_true_binary, y_pred_scores)
-    
-    return auc_pr_scores
+    # Ordenar por score descendente
+    order = np.argsort(-scores)
+    y_true_sorted = y_true_bin[order]
+    scores_sorted = scores[order]
+
+    # Barrido de umbral en puntos únicos de score
+    # (con acumulados para evitar O(n^2))
+    tp_cum = np.cumsum(y_true_sorted == 1)
+    fp_cum = np.cumsum(y_true_sorted == 0)
+
+    # Para cada posición i, si cortamos hasta i -> TP=tp_cum[i], FP=fp_cum[i]
+    # FN = P - TP
+    P = tp_cum[-1]  # cantidad de positivos verdaderos
+    # Si no hay positivos, devolvemos curva degenerada
+    if P == 0:
+        return np.array([1.0]), np.array([0.0])
+
+    # Tomar índices donde el score cambia (umbrales únicos)
+    # Incluimos el último índice para cerrar la curva
+    distinct_mask = np.r_[True, scores_sorted[1:] != scores_sorted[:-1]]
+    idxs = np.where(distinct_mask)[0]
+
+    precisions = []
+    recalls = []
+    for i in idxs:
+        TP = tp_cum[i]
+        FP = fp_cum[i]
+        FN = P - TP
+        prec = TP / (TP + FP) if (TP + FP) > 0 else 1.0
+        rec  = TP / (TP + FN) if (TP + FN) > 0 else 0.0
+        precisions.append(prec)
+        recalls.append(rec)
+
+    # Por convención, agregamos el punto (recall=0, precision=pos_rate) para cerrar
+    # y (recall=1, precision=TP/(TP+FP) al threshold mínimo ya está incluido.
+    precisions = np.array(precisions, dtype=float)
+    recalls = np.array(recalls, dtype=float)
+
+    # Asegurar orden creciente de recall para AUC
+    order_r = np.argsort(recalls)
+    return precisions[order_r], recalls[order_r]
+
+def roc_curve_ovr(y_true, y_scores, positive_label):
+    """
+    Curva ROC para una clase (OvR) sin sklearn.
+    Devuelve (fpr, tpr).
+    """
+    y_true_bin = _binarize(y_true, positive_label)
+    scores = np.asarray(y_scores, dtype=float)
+
+    order = np.argsort(-scores)
+    y_true_sorted = y_true_bin[order]
+    scores_sorted = scores[order]
+
+    tp_cum = np.cumsum(y_true_sorted == 1)
+    fp_cum = np.cumsum(y_true_sorted == 0)
+
+    P = tp_cum[-1]
+    N = fp_cum[-1]
+    if P == 0 or N == 0:
+        # Curva degenerada si falta una clase
+        return np.array([0.0, 1.0]), np.array([0.0, 1.0])
+
+    distinct_mask = np.r_[True, scores_sorted[1:] != scores_sorted[:-1]]
+    idxs = np.where(distinct_mask)[0]
+
+    tpr_list = []
+    fpr_list = []
+    for i in idxs:
+        TP = tp_cum[i]
+        FP = fp_cum[i]
+        TPR = TP / P
+        FPR = FP / N
+        tpr_list.append(TPR)
+        fpr_list.append(FPR)
+
+    # Añadir (0,0) y (1,1) para completar la curva
+    fpr = np.array([0.0] + fpr_list + [1.0], dtype=float)
+    tpr = np.array([0.0] + tpr_list + [1.0], dtype=float)
+
+    # Asegurar orden por FPR
+    order_f = np.argsort(fpr)
+    return fpr[order_f], tpr[order_f]
+
+def auc_pr_ovr(y_true, y_scores, positive_label):
+    precisions, recalls = pr_curve_ovr(y_true, y_scores, positive_label)
+    # AUC-PR integra precision vs recall (eje x = recall)
+    return auc_trapezoid(recalls, precisions)
+
+def auc_roc_ovr(y_true, y_scores, positive_label):
+    fpr, tpr = roc_curve_ovr(y_true, y_scores, positive_label)
+    # AUC-ROC integra tpr vs fpr (eje x = fpr)
+    return auc_trapezoid(fpr, tpr)
 
