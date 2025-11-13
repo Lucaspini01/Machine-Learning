@@ -28,8 +28,7 @@ def f1_score_macro(y_true, y_pred, num_classes):
             f1_per_class.append(f1)
     return np.mean(f1_per_class)
 
-import numpy as np
-import models  # se asume que models.py está en el mismo directorio
+
 
 def metrics_report(X_train, Y_train_oh, y_train,
                    X_val, Y_val_oh, y_val,
