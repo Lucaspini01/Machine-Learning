@@ -149,3 +149,12 @@ def explained_variance_plot(pca: Dict[str, np.ndarray]):
     ax.set_ylabel("Varianza explicada acumulada")
     ax.grid(True, alpha=0.3)
     return fig
+
+def z_standardize(Z):
+    """
+    Estandariza Z a media 0 y desviación estándar 1 por característica.
+    """
+    mu = Z.mean(axis=0, keepdims=True)
+    sd = Z.std(axis=0, ddof=1, keepdims=True)
+    sd[sd == 0] = 1.0
+    return (Z - mu) / sd

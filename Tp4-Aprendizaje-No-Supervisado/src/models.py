@@ -180,27 +180,30 @@ def fit_best_gmm(Z, K, n_init=3, reg_covar=1e-6, random_state=0, use_kmeans_init
     return best
 
 def gmm_sweep_over_K(Z, Ks, n_init=3, random_state=0):
-    """
-    Barre K y calcula loglik, AIC, BIC y silhouette en el set dado (Z).
-    Devuelve un diccionario con arrays alineados a Ks.
-    """
     D = Z.shape[1]
     logliks, bics, aics, sils = [], [], [], []
+
     for K in Ks:
-        best = fit_best_gmm(Z, K, n_init=n_init, random_state=random_state)
+        best = fit_best_gmm(Z, K, n_init=n_init, reg_covar=1e-3 ,random_state=random_state,use_kmeans_init=True)
         p = gmm_num_params(D, K, "full")
         N = Z.shape[0]
         ll = best["loglik"]
         aic = -2 * ll + 2 * p
         bic = -2 * ll + p * np.log(N)
-        # silhouette: usando etiquetas duras a partir de responsabilidades argmax
-        sil = metrics.silhouette_score(Z, best["labels"])
+
+        labels = best["labels"]
+        uniq, counts = np.unique(labels, return_counts=True)
+        if len(uniq) < 2 or np.any(counts < 2):
+            sil = np.nan
+        else:
+            sil = metrics.silhouette_score(Z, labels)
+
         logliks.append(ll); aics.append(aic); bics.append(bic); sils.append(sil)
-    out = {
+
+    return {
         "Ks": np.array(Ks),
         "loglik": np.array(logliks),
         "AIC": np.array(aics),
         "BIC": np.array(bics),
         "silhouette": np.array(sils),
     }
-    return out
