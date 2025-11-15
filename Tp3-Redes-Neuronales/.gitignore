@@ -1,2 +1,4 @@
-
-*.npy
+pytorch_cpu_env/
+torch-env/
+data/
+__pycache__/

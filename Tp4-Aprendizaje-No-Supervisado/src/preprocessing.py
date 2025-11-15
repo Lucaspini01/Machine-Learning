@@ -7,22 +7,39 @@ from typing import Tuple, Dict, Optional
 # ----------------------------
 # Carga y utilidades de imágenes (Punto 1.a y 1.b)
 # ----------------------------
-def load_faces_csv(path: str, label_col: str = "label") -> Tuple[np.ndarray, np.ndarray]:
+def load_faces_csv(path: str, label_col: Optional[str] = None) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
-    Lee caras.csv. Asume que hay una columna de etiquetas (por defecto 'label') y el resto son píxeles.
+    Carga caras.csv.
+    - Si label_col se pasa (e.g., "person_id"), la usa como etiqueta.
+    - Si label_col es None, intenta detectar 'person_id' o 'label'.
+    - Si no hay etiqueta detectable, devuelve y=None.
     Devuelve:
-      X: (N, D) en float32 [0..1]
-      y: (N,) etiquetas (str/int)
+      X: (N, D) float32 con pixeles en [0,1] si venían 0..255
+      y: (N,) con etiquetas, o None si no hay
     """
     df = pd.read_csv(path)
-    if label_col not in df.columns:
-        # si no hay columna explícita, asumimos que la última es la etiqueta
-        label_col = df.columns[-1]
-    y = df[label_col].to_numpy()
-    X = df.drop(columns=[label_col]).to_numpy(dtype=np.float32)
-    # normalizamos a [0,1] si parece estar en [0,255]
-    if X.max() > 1.0:
+
+    # Detección de columna de etiqueta si no se especifica
+    detected = None
+    if label_col is None:
+        for cand in ("person_id", "label"):
+            if cand in df.columns:
+                detected = cand
+                break
+    else:
+        detected = label_col if label_col in df.columns else None
+
+    if detected is None:
+        X = df.to_numpy(dtype=np.float32)
+        y = None
+    else:
+        y = df[detected].to_numpy()
+        X = df.drop(columns=[detected]).to_numpy(dtype=np.float32)
+
+    # Normalización a [0,1] si corresponde
+    if X.size > 0 and X.max() > 1.0:
         X = X / 255.0
+
     return X, y
 
 def plot_images(X: np.ndarray, idxs: np.ndarray, img_shape=(64,64), ncols=5, suptitle=None):
@@ -71,20 +88,25 @@ def plot_class_distribution(y):
 # Split estratificado (Punto 1.c)
 # ----------------------------
 def stratified_split(X, y, test_size=0.2, random_state=42):
-    """
-    Split estratificado sin scikit-learn.
-    """
     rng = np.random.default_rng(random_state)
     X = np.asarray(X)
+    if y is None:
+        N = X.shape[0]
+        idx = np.arange(N); rng.shuffle(idx)
+        n_test = int(round(N * test_size))
+        te, tr = idx[:n_test], idx[n_test:]
+        return (X[tr], None), (X[te], None)
+    # estratificado
     y = np.asarray(y)
     train_idx, test_idx = [], []
     for cls in np.unique(y):
-        idx = np.where(y == cls)[0]
-        rng.shuffle(idx)
-        n_test = max(1, int(np.round(len(idx) * test_size)))
-        test_idx.extend(idx[:n_test].tolist())
-        train_idx.extend(idx[n_test:].tolist())
+        ii = np.where(y == cls)[0]
+        rng.shuffle(ii)
+        n_t = max(1, int(np.round(len(ii) * test_size)))
+        test_idx.extend(ii[:n_t].tolist())
+        train_idx.extend(ii[n_t:].tolist())
     return (X[train_idx], y[train_idx]), (X[test_idx], y[test_idx])
+
 
 # ----------------------------
 # Estandarización + PCA (Punto 2.a y 2.b)

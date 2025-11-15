@@ -1,18 +1,39 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+import src.models as models
 
-# --- Accuracy ---
+# Accuracy
 def accuracy(y_true, y_pred):
     return np.mean(y_true == y_pred)
 
-# --- Matriz de confusión ---
-def confusion_matrix(y_true, y_pred, num_classes):
-    cm = np.zeros((num_classes, num_classes), dtype=int)
-    for t, p in zip(y_true, y_pred):
-        cm[t, p] += 1
-    return cm
+# Matriz de confusión
+def confusion_matrix(y_true, y_pred):
+    tp = np.sum((y_true == 1) & (y_pred == 1))
+    tn = np.sum((y_true == 0) & (y_pred == 0))
+    fp = np.sum((y_true == 0) & (y_pred == 1))
+    fn = np.sum((y_true == 1) & (y_pred == 0))
 
-# --- F1-Score Macro ---
+    cm = pd.DataFrame([[tn, fp], [fn, tp]], index=['True Neg', 'True Pos'], columns=['Pred Neg', 'Pred Pos'])   
+    plt.figure(figsize=(6, 4))
+    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    plt.title('Confusion Matrix')
+    plt.colorbar()
+    tick_marks = np.arange(len(cm.columns))
+    plt.xticks(tick_marks, cm.columns, rotation=45)
+    plt.yticks(tick_marks, cm.index)
+    thresh = cm.values.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            plt.text(j, i, format(cm.iloc[i, j], 'd'),
+                     ha="center", va="center",
+                     color="white" if cm.iloc[i, j] > thresh else "black")
+    plt.xlabel('Predicted label')
+    plt.ylabel('True label')
+    plt.tight_layout()
+    plt.show()
+
+# F1-Score
 def f1_score_macro(y_true, y_pred, num_classes):
     f1_per_class = []
     for c in range(num_classes):
@@ -27,7 +48,6 @@ def f1_score_macro(y_true, y_pred, num_classes):
             f1 = 2 * precision * recall / (precision + recall + 1e-9)
             f1_per_class.append(f1)
     return np.mean(f1_per_class)
-
 
 
 def metrics_report(X_train, Y_train_oh, y_train,
@@ -66,8 +86,8 @@ def metrics_report(X_train, Y_train_oh, y_train,
     loss_val   = models.cross_entropy_loss(Y_val_oh, Y_hat_val)
 
     # === Matriz de confusión y F1 ===
-    cm_train = confusion_matrix(y_train, y_train_pred, num_classes)
-    cm_val   = confusion_matrix(y_val, y_val_pred, num_classes)
+    cm_train = confusion_matrix(y_train, y_train_pred)
+    cm_val   = confusion_matrix(y_val, y_val_pred)
 
     f1_train = f1_score_macro(y_train, y_train_pred, num_classes)
     f1_val   = f1_score_macro(y_val, y_val_pred, num_classes)

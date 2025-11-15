@@ -65,14 +65,22 @@ class KMeans:
 # ----------------------------
 # Gaussian Mixture Model (EM) (Punto 3.b)
 # ----------------------------
+# src/models.py
+import numpy as np
+from typing import Optional
+
 class GMM:
-    def __init__(self, n_components=8, max_iter=200, tol=1e-4, reg_covar=1e-6, random_state=0, init_means: Optional[np.ndarray]=None):
+    def __init__(self, n_components=8, max_iter=200, tol=1e-4, reg_covar=1e-6,
+                 random_state=0, init_means: Optional[np.ndarray]=None,
+                 cov_type: str = "full"):
+        assert cov_type in ("full", "diag")
         self.n_components = n_components
         self.max_iter = max_iter
         self.tol = tol
         self.reg_covar = reg_covar
         self.random_state = random_state
         self.init_means = init_means
+        self.cov_type = cov_type
         # parámetros
         self.pi_ = None
         self.mu_ = None
@@ -88,7 +96,10 @@ class GMM:
             self.mu_ = X[idx].copy()
         else:
             self.mu_ = self.init_means.copy()
-        self.Sigma_ = np.stack([np.cov(X.T) + self.reg_covar*np.eye(D) for _ in range(self.n_components)], axis=0)
+        base_cov = np.cov(X.T) + (self.reg_covar * np.eye(D))
+        if self.cov_type == "diag":
+            base_cov = np.diag(np.diag(base_cov))
+        self.Sigma_ = np.stack([base_cov.copy() for _ in range(self.n_components)], axis=0)
         self.pi_ = np.ones(self.n_components) / self.n_components
 
     def _gaussian_pdf(self, X, mu, Sigma):
@@ -118,8 +129,12 @@ class GMM:
         self.Sigma_ = np.zeros((self.n_components, D, D))
         for k in range(self.n_components):
             Xc = X - self.mu_[k]
-            self.Sigma_[k] = (Xc.T * resp[:, k]) @ Xc / Nk[k]
-            self.Sigma_[k].flat[::D+1] += self.reg_covar  # regularización diag
+            Sk = (Xc.T * resp[:, k]) @ Xc / Nk[k]
+            if self.cov_type == "diag":
+                Sk = np.diag(np.diag(Sk))
+            # regularización diagonal
+            Sk.flat[::D+1] += self.reg_covar
+            self.Sigma_[k] = Sk
 
     def fit(self, X):
         self._init_params(X)
@@ -139,7 +154,11 @@ class GMM:
         return resp
 
     def predict(self, X):
-        return self.predict_proba(X).argmax(axis=1)
+        # etiquetas con tie-break leve para evitar empates
+        rng = np.random.default_rng(self.random_state)
+        resp = self.predict_proba(X)
+        resp = resp + 1e-12 * rng.standard_normal(resp.shape)
+        return resp.argmax(axis=1)
 
 def gmm_num_params(D, K, cov_type="full"):
     """
@@ -151,59 +170,57 @@ def gmm_num_params(D, K, cov_type="full"):
     if cov_type != "full":
         raise NotImplementedError("Solo 'full' implementado aquí.")
     return (K - 1) + K * D + K * (D * (D + 1) // 2)
+# en src/models.py (o donde tengas fit_best_gmm)
+import numpy as np
 
-def fit_best_gmm(Z, K, n_init=3, reg_covar=1e-6, random_state=0, use_kmeans_init=True):
-    """
-    Corre GMM varias veces y devuelve el mejor por log-likelihood.
-    Opcionalmente inicializa medias con KMeans para estabilizar.
-    """
+def fit_best_gmm(Z, K, n_init=3, reg_covar=1e-3, random_state=0, use_kmeans_init=True):
     best = {"model": None, "loglik": -np.inf, "labels": None}
     rng = np.random.default_rng(random_state)
-    init_means_list = [None] * n_init
+    init_means_list = []
 
     if use_kmeans_init:
         km = KMeans(n_clusters=K, n_init=5, random_state=random_state).fit(Z)
-        init_means_list[0] = km.cluster_centers_
-        # el resto al azar
-        for i in range(1, n_init):
+        init_means_list.append(km.cluster_centers_)
+        for _ in range(n_init-1):
             idx = rng.choice(Z.shape[0], size=K, replace=False)
-            init_means_list[i] = Z[idx].copy()
+            init_means_list.append(Z[idx].copy())
     else:
-        for i in range(n_init):
+        for _ in range(n_init):
             idx = rng.choice(Z.shape[0], size=K, replace=False)
-            init_means_list[i] = Z[idx].copy()
+            init_means_list.append(Z[idx].copy())
 
     for init_means in init_means_list:
         gmm = GMM(n_components=K, reg_covar=reg_covar, random_state=random_state, init_means=init_means).fit(Z)
+        # <<< tie-break en responsabilidades >>>
+        resp = gmm.predict_proba(Z)
+        resp = resp + 1e-12 * rng.standard_normal(resp.shape)  # rompe empates
+        labs = resp.argmax(axis=1)
+
         if gmm.loglik_ > best["loglik"]:
-            best.update({"model": gmm, "loglik": gmm.loglik_, "labels": gmm.predict(Z)})
+            best.update({"model": gmm, "loglik": gmm.loglik_, "labels": labs})
     return best
+# en tu gmm_sweep_over_K
+from src.metrics import silhouette_score
 
-def gmm_sweep_over_K(Z, Ks, n_init=3, random_state=0):
+def gmm_sweep_over_K(Z, Ks, n_init=5, random_state=0):
     D = Z.shape[1]
-    logliks, bics, aics, sils = [], [], [], []
-
+    logliks, aics, bics, sils = [], [], [], []
+    N = Z.shape[0]
     for K in Ks:
-        best = fit_best_gmm(Z, K, n_init=n_init, reg_covar=1e-3 ,random_state=random_state,use_kmeans_init=True)
-        p = gmm_num_params(D, K, "full")
-        N = Z.shape[0]
+        best = fit_best_gmm(Z, K, n_init=n_init, reg_covar=1e-3, random_state=random_state, use_kmeans_init=True)
         ll = best["loglik"]
-        aic = -2 * ll + 2 * p
-        bic = -2 * ll + p * np.log(N)
+        p = (K - 1) + K*D + K*(D*(D+1)//2)
+        aic = -2*ll + 2*p
+        bic = -2*ll + p*np.log(N)
 
-        labels = best["labels"]
-        uniq, counts = np.unique(labels, return_counts=True)
-        if len(uniq) < 2 or np.any(counts < 2):
+        labs = best["labels"]
+        # >>> validar clusters
+        uniq, counts = np.unique(labs, return_counts=True)
+        if len(uniq) < 2 or (counts < 2).any():
             sil = np.nan
         else:
-            sil = metrics.silhouette_score(Z, labels)
+            sil = silhouette_score(Z, labs)
 
         logliks.append(ll); aics.append(aic); bics.append(bic); sils.append(sil)
+    return {"Ks": np.array(Ks), "loglik": np.array(logliks), "AIC": np.array(aics), "BIC": np.array(bics), "silhouette": np.array(sils)}
 
-    return {
-        "Ks": np.array(Ks),
-        "loglik": np.array(logliks),
-        "AIC": np.array(aics),
-        "BIC": np.array(bics),
-        "silhouette": np.array(sils),
-    }
